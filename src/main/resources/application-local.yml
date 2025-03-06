@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: delivery
+  datasource:
+    url: jdbc:mysql://localhost:3306/deliveryapp
+    username: root
+    password: Getbig12!
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: create
+    properties:
+      hibernate:
+#        show_sql: true
+        format_sql: true
+        use_sql_comments: true
+        dialect: org.hibernate.dialect.MySQLDialect
+
+  data:
+    redis:
+      host: localhost
+      username: default
+      port: 6379
+      password: Getbig12!
+jwt:
+  secret:
+    key: c7a913dee0cbeb1256e5d6de4d0f8e317f479666954ee2b4cf13a10350737fdc954e6b8c826a42cb204f69f679ba01f1e49c6f8f528370fe4422d74c9946b24754addff52a6abcbe9df1595f9ac65ed2a4deafaaf1bc3a23ee0c30a89dd0ca41e5d54578080feddf1cc8232b8afdf853a66c3fd86f1982a47889bdb0a43e85a684002787b2f04085271a3de2684b243dbded39ce7f95cffb0529536e743f819091a4fca90a014ebb563136437fd6b38840bf9997dfc2dd56b3e1cb214a338a10d081b722d23c7083c206ea83b39eb9d3469128e6a5d92f8214077857dc623683ac6ea9f4145809879a1ba08bb5b89db462fdebc5d42b0fe58dbec65b6e26afcd
+
+logging.level:
+  org.hibernate.SQL: debug
+  org.hibernate.orm.jdbc.bind: TRACE

@@ -52,11 +52,19 @@ public class Order {
     private List<OrderItem> orderItems = new ArrayList<>();
 
 
-    public Order(User user, Store store, int usePoints) {
+    private Order(User user, Store store, int usePoints) {
         this.user = user;
         this.store = store;
         this.usedPoints = usePoints;
         this.orderStatus = OrderStatus.PENDING;
+    }
+
+    public static Order createOrder(User user, Store store, int usePoints, List<OrderItem> orderItems) {
+        Order order = new Order(user, store, usePoints);
+        for (OrderItem orderItem : orderItems) {
+            order.addOrderItem(orderItem);
+        }
+        return order;
     }
 
 

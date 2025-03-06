@@ -72,6 +72,7 @@ public class CartRepository {
         String cartKey = getCartKey(userId);
         String itemKey = getItemKey(itemId);
         redisTemplate.opsForHash().delete(cartKey, itemKey);
+        refreshCartExpiration(cartKey);
     }
 
     public void decreaseItemQuantity(Long userId, Long itemId, int quantity) {

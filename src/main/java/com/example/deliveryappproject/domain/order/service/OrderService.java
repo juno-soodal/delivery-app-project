@@ -1,14 +1,17 @@
 package com.example.deliveryappproject.domain.order.service;
 
-import com.example.deliveryappproject.common.exception.BadRequestException;
 import com.example.deliveryappproject.common.exception.ForbiddenException;
 import com.example.deliveryappproject.common.exception.NotFoundException;
 import com.example.deliveryappproject.domain.cart.model.CartItem;
-import com.example.deliveryappproject.domain.cart.repository.CartRepository;
+import com.example.deliveryappproject.domain.cart.service.CartFinder;
+import com.example.deliveryappproject.domain.cart.service.CartConverter;
+import com.example.deliveryappproject.domain.cart.service.CartReader;
+import com.example.deliveryappproject.domain.cart.service.CartWriter;
 import com.example.deliveryappproject.domain.delivery.entity.Delivery;
 import com.example.deliveryappproject.domain.delivery.repository.DeliveryRepository;
 import com.example.deliveryappproject.domain.menu.entity.Menu;
-import com.example.deliveryappproject.domain.menu.repository.MenuRepository;
+import com.example.deliveryappproject.domain.menu.service.MenuReader;
+import com.example.deliveryappproject.domain.menu.service.MenuValidator;
 import com.example.deliveryappproject.domain.order.dto.OrderDetailResponse;
 import com.example.deliveryappproject.domain.order.dto.OrderRequest;
 import com.example.deliveryappproject.domain.order.entity.Order;
@@ -17,23 +20,22 @@ import com.example.deliveryappproject.domain.order.repository.OrderRepository;
 import com.example.deliveryappproject.domain.order.service.dto.OrderResponse;
 import com.example.deliveryappproject.domain.policy.PointPolicy;
 import com.example.deliveryappproject.domain.store.entity.Store;
-import com.example.deliveryappproject.domain.store.service.StoreService;
+import com.example.deliveryappproject.domain.store.service.StoreFinder;
 import com.example.deliveryappproject.domain.user.entity.User;
-import com.example.deliveryappproject.domain.user.service.UserService;
+import com.example.deliveryappproject.domain.user.service.UserReader;
 import com.example.deliveryappproject.domain.user.userpoint.PointHistoryRepository;
 import com.example.deliveryappproject.domain.user.userpoint.entity.PointHistory;
 import com.example.deliveryappproject.domain.user.userpoint.entity.PointType;
+import com.example.deliveryappproject.domain.user.userpoint.service.PointValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalTime;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 import static com.example.deliveryappproject.domain.order.exception.ErrorMessages.MIN_ORDER_AMOUNT_REQUIRED;
-import static com.example.deliveryappproject.domain.order.exception.ErrorMessages.ORDER_NOT_AVAILABLE;
 import static com.example.deliveryappproject.domain.order.exception.ErrorMessages.ORDER_NOT_FOUND;
 import static com.example.deliveryappproject.domain.order.exception.ErrorMessages.ORDER_NOT_OWNER;
 import static com.example.deliveryappproject.domain.order.exception.ErrorMessages.ORDER_STATUS_NOT_PENDING;
@@ -43,57 +45,60 @@ import static com.example.deliveryappproject.domain.order.exception.ErrorMessage
 @RequiredArgsConstructor
 public class OrderService {
 
-    private final CartRepository cartRepository;
-    private final MenuRepository menuRepository;
     private final OrderRepository orderRepository;
     private final DeliveryRepository deliveryRepository;
     private final PointHistoryRepository pointHistoryRepository;
     private final PointPolicy pointPolicy;
-    private final StoreService storeService;
-    private final UserService userService;
+
+    private final CartFinder cartFinder;
+    private final StoreFinder storeFinder;
+    private final CartReader cartReader;
+    private final CartConverter cartConverter;
+    private final MenuReader menuReader;
+    private final PriceCalculator priceCalculator;
+    private final MenuValidator menuValidator;
+    private final UserReader userReader;
+    private final PointValidator pointValidator;
+    private final CartWriter cartWriter;
+    private final OrderItemProcessor orderItemProcessor;
 
 
     @Transactional
     public OrderResponse order(Long userId, OrderRequest orderRequest) {
 
-        Long storeId = cartRepository.findStoreId(userId);
+        //장바구니 조회
+        Long storeId = cartFinder.findStoreId(userId);
 
-        if (storeId == null) {
-            throw new NotFoundException("cart is empty");
-        }
+        //가게 조회 및 검증
+        LocalTime orderTime = LocalTime.now();
+        Store store = storeFinder.findOrderableStore(storeId, orderTime);
 
-        Store store = storeService.findStoreByIdOrElseThrow(storeId);
+        List<CartItem> cartItems = cartReader.readItems(userId);
 
-        validateOrderAvailability(store);
+        List<Long> cartItemIds = cartConverter.toCarItemIds(cartItems);
 
-        List<CartItem> items = cartRepository.findItems(userId);
-        List<Long> itemIds = items.stream()
-                .map(item -> item.getItemId())
-                .toList();
+        List<Menu> menus = menuReader.readMenus(cartItemIds);
 
-        List<Menu> menus = menuRepository.findAllById(itemIds);
-        Map<Long, Menu> menuMap = menus.stream().collect(Collectors.toMap(Menu::getId, menu -> menu));
+        menuValidator.validateCartItemsExist(cartItemIds, menus);
 
-        BigDecimal totalPrice = calculateTotalPrice(menuMap, items);
+        BigDecimal totalPrice = priceCalculator.calculateCartTotalPrice(menus, cartItems);
 
         validateMinOrderAmount(store, totalPrice);
 
+        User user = userReader.read(userId);
 
-        //포인트 사용 검증
-        User user = userService.findUserByIdOrElseThrow(userId);
-        validateUsePoints(user, orderRequest.getUsePoints());
+        pointValidator.validateUsePoints(user, orderRequest.getUsePoints());
 
-        Order order = new Order(user, store, orderRequest.getUsePoints());
+        List<OrderItem> orderItems = orderItemProcessor.convertCartItemsToOrderItems(cartItems, menus);
 
-        convertAndAddOrderItems(order,menuMap, items);
-
-
+        Order order = Order.createOrder(user, store, orderRequest.getUsePoints(), orderItems);
+        //주문 저장
         orderRepository.save(order);
 
-        //장바구니 비우기
-        cartRepository.clear(userId);
+        //장바구니 초기화
+        cartWriter.clear(userId);
 
-
+        //끝
         return OrderResponse.of(order.getId(),storeId, order.getOrderStatus());
 
     }
@@ -112,7 +117,7 @@ public class OrderService {
         validateStoreOwner(order, userId);
         validateOrderStatusPending(order);
 
-        User user = userService.findUserByIdOrElseThrow(userId);
+        User user = userReader.read(userId);
 
         validateUsePoints(user, order.getUsedPoints());
 
@@ -161,52 +166,9 @@ public class OrderService {
         return OrderDetailResponse.from(order);
     }
 
-    private void convertAndAddOrderItems(Order order, Map<Long, Menu> menuMap, List<CartItem> items) {
-
-        for (CartItem item : items) {
-            Long itemId = item.getItemId();
-            int quantity = item.getQuantity();
-
-            Menu menu = menuMap.get(itemId);
-            if (menu == null) {
-                throw new BadRequestException("menu not found: " + itemId);
-            }
-
-            BigDecimal menuTotalPrice = menu.getPrice().multiply(BigDecimal.valueOf(quantity));
-            OrderItem orderItem = OrderItem.createOrderItem(menu, menuTotalPrice, quantity);
-            order.addOrderItem(orderItem);
-        }
-    }
-
-    private BigDecimal calculateTotalPrice(Map<Long, Menu> menuMap, List<CartItem> items) {
-        BigDecimal totalPrice = BigDecimal.ZERO;
-
-        for (CartItem item : items) {
-            Long itemId = item.getItemId();
-            int quantity = item.getQuantity();
-
-            Menu menu = menuMap.get(itemId);
-
-            if (menu == null) {
-                throw new NotFoundException("menu not found: " + itemId);
-            }
-
-            BigDecimal menuTotalPrice = menu.getPrice().multiply(BigDecimal.valueOf(quantity));
-            totalPrice = totalPrice.add(menuTotalPrice);
-        }
-        return totalPrice;
-
-    }
-
     private void validateMinOrderAmount(Store store, BigDecimal totalPrice) {
         if (totalPrice.compareTo(store.getMinOrderPrice()) < 0) {
             throw new ForbiddenException(MIN_ORDER_AMOUNT_REQUIRED);
-        }
-    }
-
-    private void validateOrderAvailability(Store store) {
-        if (!store.isOrderAvailable()) {
-            throw new ForbiddenException(ORDER_NOT_AVAILABLE);
         }
     }
 
